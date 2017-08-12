@@ -1,6 +1,5 @@
 namespace :pet_name do
   task :fix_outdated_pet_names => :environment do |t, args|
-    # filtered_shelters = Shelter.eager_load(pets: :type).where("type.exotic == false")
     shelters_with_exotic_animals = Shelter.joins(pets: :type).where(types: {exotic: true})
     shelters_without_exotic_animals = Shelter.where.not(id:shelters_with_exotic_animals)
 
