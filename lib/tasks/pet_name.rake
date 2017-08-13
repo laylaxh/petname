@@ -1,37 +1,71 @@
+=begin
+  Title: Ruby Script Coding Sample
+  Author: Layla Habahbeh
+  Instructions to test this script: 
+    1. Copy the file path of the related spec file: 'pet_name_spec.rb'
+    2. Run spec in the console: 'rspec <filepath>'
+  Description: A rake task that backfills animal shelter databases and efficiently renames animals based on the 
+  following criteria:
+    1. Shelters that house any exotic animals are being closed down. Don't bother renaming any animals in 
+       those shelters, even if they are not exotic.
+    2. Current animal names are species based - they must be renamed to be more specific based on the breed.
+         Before script: Dog 1
+          After script: Husky 1
+    3. Each animal within a breed should be renumbered based on the date/time they were admitted to the shelter.
+    4. Animals who enter the shelter with a custimized name, like 'Fluffy,' will retain it's customized name.
+        Before script: Fluffy
+         After script: Fluffy
+  Helpful tips: 
+    The DB structure is held in 'db/schema.rb' - you can see the attributes for the Pet, Type, and Shelter models here
+    DB relationships can be seen in the 'app/models' directory
+=end
+
 namespace :pet_name do
-  task :fix_outdated_pet_names => :environment do |t, args|
+  task :fix_outdated_pet_names => :environment do
+    # Query the DB of shelters to filter out shelters that contain any number of exotic animals
     shelters_with_exotic_animals = Shelter.joins(pets: :type).where(types: {exotic: true})
     shelters_without_exotic_animals = Shelter.where.not(id:shelters_with_exotic_animals)
 
     batch_count = 1
 
-    shelters_without_exotic_animals.find_in_batches do |batch|
-      pets_to_update = []
+    # Iterate through the filtered shelters in batches of 50 - each batch yields an array  
+    shelters_without_exotic_animals.find_in_batches(:batch_size => 50) do |batch|
+      pets_to_update = [] # Initialize an empty array to store renamed pets in order to do a mass update
+      
+      # Iterate through each shelter in the current batch of 50
       batch.each do |shelter|
-        pets_grouped_by_species = sort_pets_by_species_type(shelter)
 
-          # {"fallout-crate"=>[#<Subscription id: 2, user_id: 1, plan_id: 3252>], "sanrio-crate"=>[#<Subscription id: 6, user_id: 1, plan_id: 1297>,#<Subscription id: 6, user_id: 1, plan_id: 1297>],...}
-          # {"dog"=>[#<Pet id: 1, name: "dog 3", type_id: "2", sex: nil, color: nil, size: nil, shelter_id: 2, created_at: "2017-08-09 15:48:58", updated_at: "2017-08-11 15:37:41", breed: "Husky">, #<Pet id: 3, name: "roxy", type_id: "2", sex: nil, color: nil, size: nil, shelter_id: 2, created_at: "2017-08-10 22:32:47", updated_at: "2017-08-11 15:39:49", breed: "Yorkie">, #<Pet id: 5, name: "Kole 4", type_id: "2", sex: nil, color: nil, size: nil, shelter_id: 2, created_at: "2017-08-11 15:40:41", updated_at: "2017-08-11 15:40:41", breed: "Lab">, #<Pet id: 6, name: "Yorkie 3", type_id: "2", sex: nil, color: nil, size: nil, shelter_id: 2, created_at: "2017-08-11 15:41:28", updated_at: "2017-08-11 15:41:28", breed: "Yorkie">]}
-        next if pets_grouped_by_species.count == 0
+        # Create a hash of hashes where each key is a breed and each value is an array of animals of that breed:
+        #   {  "husky"=>[#<Pet id: 677, name: "dog 1", type_id: 272, shelter_id: 272, ..., breed: "husky">, 
+                        #<Pet id: 680, name: "Rocket", type_id: 272, shelter_id: 272, ..., breed: "husky">], 
+        #   {"siamese"=>[#<Pet id: 679, name: "cat 7", type_id: 122, shelter_id: 272, ..., breed: "siamese">]}
+        pets_grouped_by_breed = sort_pets_by_breed(shelter) 
+        
+        next if pets_grouped_by_breed.count == 0 # Abort this loop and move onto the next one if there are no results to assess 
 
-        # for each species, rename the pets in that species so they have a more specific name
-        # the exception is if the pets name has already been customized/personalized
-        # ex: Dog 10 and Dog 11 could be renamed to Golden Retriever 9 and Yorkie 13 depending on the
-        #     other dogs of the same species at the shelter and the date/time they were admitted 
-        #     Charlie will not be renamed because his name has been personalized
-        pets_grouped_by_species.each do |species_name,pets|
+        # Iterate through each breed, identify which pets to rename, and rename them
+        pets_grouped_by_breed.each do |breed,pets|
+
+          # Select pets with either the standard naming convention of either '<species type> #', ex: 'Cat 8'
+          # If a pet's name already has the new naming convention of '<breed> #', we still want to add it to the uncustomized_pets
+          # array because it will likely need renumbering based on the comparison of it's admittance date to others of it's breed
           uncustomized_pets = pets.select do |pet|
-            pet.name =~ /^#{pet.type.name} \d+$|^#{pet.breed} \d+$/  # We still want to rename Yorkie 4 
-          end                                                     # because it might get renumbered
-          uncustomized_pets_ordered = uncustomized_pets.sort_by(&:created_at) # Order all uncustomized pets
+            pet.name =~ /^#{pet.type.name} \d+$|^#{pet.breed} \d+$/ 
+          end                                                     
+          uncustomized_pets_ordered = uncustomized_pets.sort_by(&:created_at) # Order the filtered array by admittance date/time
 
+          # Transaction to rename the finalized list of pets
           begin
             rename_pets(uncustomized_pets_ordered, pets_to_update)
           rescue
-            puts "Failure occurred in rename_pets"
+            puts "Failure occurred in renaming pets."
           end
         end 
       end
+      # .import is a function of the activerecord-import library for bulk inserting data using ActiveRecord - it generates
+      # the minimal number of SQL insert statments required, avoiding the N+1 insert issue
+      # on_duplicate_key_update[:name] updates the name field if a primary or unique key constraint is violated 
+      # in the Pet ActiveRecord model
       Pet.import pets_to_update, on_duplicate_key_update: [:name], validate:false
       puts "Renaming in DB complete for #{batch.count} Shelters(s) in Batch #{batch_count} of Update"
       batch_count += 1
@@ -40,14 +74,18 @@ namespace :pet_name do
 
   private
 
-  def sort_pets_by_species_type(shelter)
+  # Group the collection of shelter pets by breed and return a hash where the keys are each breed and the values are arrays 
+  # of pets in the collection that correspond to the key
+  def sort_pets_by_breed(shelter)
     shelter.pets.group_by do |pet|
-      pet.type.name
+      pet.breed
     end
   end
 
+  # Each pet in the finalized list is renamed in order of admittance and injected into the pets_to_update array
+  # that will accumulate updated pet names and rename them in the DB as a batch instead of individually
   def rename_pets(uncustomized_pets_ordered, pets_to_update)
-    counter = 1
+    counter = 1  # Because the pets are ordered by admittance date already, a counter can be used to properly number them
     uncustomized_pets_ordered.each do |pet|
       pet.name = "#{pet.breed} #{counter}"
       pets_to_update << pet

@@ -4,8 +4,8 @@ FactoryGirl.define do
     exotic false
   end
 
-  factory :unicorn, class: Type do
-    name "unicorn"
+  factory :ocelot, class: Type do
+    name "ocelot"
     exotic true
   end
 end

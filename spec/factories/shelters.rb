@@ -1,8 +1,13 @@
 FactoryGirl.define do
-  factory :shelter, class: Shelter do
+  factory :shelter_without_exotic, class: Shelter do
     name "Eastside Animal Shelter"
-    street_address "4260 Via Arbolada"
     city "Los Angeles"
+    state "CA"
+  end
+
+  factory :shelter_with_exotic, class: Shelter do
+    name "Westside Wildlife Shelter"
+    city "Malibu"
     state "CA"
   end
 end
